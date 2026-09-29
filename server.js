@@ -131,10 +131,21 @@ function buildServer() {
     async ({ slug, rarity, limit }) => {
       const rarityArg = (rarity || "limited").toUpperCase();
       const first = limit || 5;
+      // Pulls prices AND scores in one query:
+      //   L5  = LAST_FIVE_SO5_AVERAGE_SCORE
+      //   L10 = LAST_TEN_PLAYED_SO5_AVERAGE_SCORE
+      //   L40 = LAST_FORTY_SO5_AVERAGE_SCORE
+      // AA is averaged in code from the last 15 games (allAroundScore per game).
       const query = `
         query PlayerMarket($slug: String!) {
           anyPlayer(slug: $slug) {
             displayName
+            l5: averageScore(type: LAST_FIVE_SO5_AVERAGE_SCORE)
+            l10: averageScore(type: LAST_TEN_PLAYED_SO5_AVERAGE_SCORE)
+            l40: averageScore(type: LAST_FORTY_SO5_AVERAGE_SCORE)
+            anyGameStats(last: 15) {
+              allAroundScore
+            }
             tokens {
               liveSingleSaleOffers(playerSlug: $slug) {
                 startDate
@@ -154,6 +165,14 @@ function buildServer() {
         if (!player) {
           return textResult(`No player found for slug '${slug}'.`);
         }
+        // Average AA over the games that have a value.
+        const aaVals = (player.anyGameStats || [])
+          .map((g) => (g ? g.allAroundScore : null))
+          .filter((v) => v != null);
+        const aaAvg =
+          aaVals.length > 0
+            ? (aaVals.reduce((s, v) => s + v, 0) / aaVals.length).toFixed(1)
+            : null;
         const raw =
           (player.tokens && player.tokens.liveSingleSaleOffers) || [];
         // Filter by rarity, sort cheapest first, take top N.
@@ -175,6 +194,12 @@ function buildServer() {
           }));
         return textResult({
           player: player.displayName,
+          scores: {
+            L5: player.l5,
+            L10: player.l10,
+            L40: player.l40,
+            AA: aaAvg, // averaged over last 15 games
+          },
           rarity: rarityArg,
           cheapest: offers,
           count: offers.length,
