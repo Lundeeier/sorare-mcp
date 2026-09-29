@@ -63,7 +63,9 @@ function buildServer() {
     "Search Sorare football players by name. Returns slug, position and current club.",
     { name: z.string().describe("Player name to search, e.g. 'Meerdink'") },
     async ({ name }) => {
-      const query = `
+      // Primary: football.players(search:). Fallback: anyPlayer(slug:) if the
+      // caller passed something slug-like.
+      const searchQuery = `
         query Search($q: String!) {
           football {
             players(search: $q, first: 8) {
@@ -77,45 +79,70 @@ function buildServer() {
           }
         }`;
       try {
-        const data = await sorareQuery(query, { q: name });
+        const data = await sorareQuery(searchQuery, { q: name });
         return textResult(data);
       } catch (e) {
+        // Fallback: treat the input as a slug guess and try anyPlayer.
+        const slugGuess = name.trim().toLowerCase().replace(/\s+/g, "-");
+        const fallback = `
+          query BySlug($slug: String!) {
+            anyPlayer(slug: $slug) {
+              slug
+              displayName
+              ... on Player { position activeClub { name } }
+            }
+          }`;
+        try {
+          const data = await sorareQuery(fallback, { slug: slugGuess });
+          if (data && data.anyPlayer) return textResult(data);
+        } catch (_) {
+          /* ignore, fall through to error below */
+        }
         return textResult(
           `Search failed: ${e.message}\n\n` +
-            `The player-search field may have changed. Try sorare_get_schema, ` +
-            `or use sorare_graphql with a query you know works.`
+            `Tried slug '${slugGuess}' as a fallback with no result. ` +
+            `Run sorare_get_schema (filter 'players' or 'Search') to find the current field.`
         );
       }
     }
   );
 
   // 2. Cheapest cards on the market for a player ------------------------------
+  // Uses the CURRENT schema: anyPlayer(slug:) for the player, and
+  // tokens.liveSingleSaleOffers(playerSlug:) for cards currently on sale.
+  // Defaults to Limited only, cheapest first, top 5.
   server.tool(
     "sorare_player_market",
-    "For a given player slug, list the cheapest cards currently for sale, optionally filtered by rarity (limited/rare/super_rare/unique).",
+    "For a given player slug, list the cheapest cards currently for sale (default: Limited only, cheapest first, top 5).",
     {
       slug: z.string().describe("Player slug, e.g. 'mexx-meerdink'"),
       rarity: z
         .enum(["limited", "rare", "super_rare", "unique"])
         .optional()
-        .describe("Card rarity to filter by. Omit for all."),
+        .describe("Card rarity to filter by. Defaults to 'limited'."),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .optional()
+        .describe("How many cheapest offers to return. Defaults to 5."),
     },
-    async ({ slug, rarity }) => {
-      const rarities = rarity ? `[${rarity}]` : `[limited, rare]`;
+    async ({ slug, rarity, limit }) => {
+      const rarityArg = (rarity || "limited").toUpperCase();
+      const first = limit || 5;
       const query = `
         query PlayerMarket($slug: String!) {
-          football {
-            player(slug: $slug) {
-              displayName
-              cards(rarities: ${rarities}, first: 20) {
-                nodes {
-                  slug
-                  rarityTyped
+          anyPlayer(slug: $slug) {
+            displayName
+            tokens {
+              liveSingleSaleOffers(playerSlug: $slug) {
+                startDate
+                price { eurCents }
+                token {
+                  rarity
                   seasonYear
                   serialNumber
-                  liveSingleSaleOffer {
-                    receiverSide { amounts { eurCents } }
-                  }
                 }
               }
             }
@@ -123,12 +150,40 @@ function buildServer() {
         }`;
       try {
         const data = await sorareQuery(query, { slug });
-        return textResult(data);
+        const player = data && data.anyPlayer;
+        if (!player) {
+          return textResult(`No player found for slug '${slug}'.`);
+        }
+        const raw =
+          (player.tokens && player.tokens.liveSingleSaleOffers) || [];
+        // Filter by rarity, sort cheapest first, take top N.
+        const offers = raw
+          .filter(
+            (o) =>
+              o.token &&
+              String(o.token.rarity).toUpperCase() === rarityArg &&
+              o.price &&
+              o.price.eurCents != null
+          )
+          .sort((a, b) => a.price.eurCents - b.price.eurCents)
+          .slice(0, first)
+          .map((o) => ({
+            price_eur: (o.price.eurCents / 100).toFixed(2),
+            rarity: o.token.rarity,
+            season: o.token.seasonYear,
+            serial: o.token.serialNumber,
+          }));
+        return textResult({
+          player: player.displayName,
+          rarity: rarityArg,
+          cheapest: offers,
+          count: offers.length,
+        });
       } catch (e) {
         return textResult(
           `Market lookup failed: ${e.message}\n\n` +
-            `A field name (e.g. liveSingleSaleOffer / cards) may have changed. ` +
-            `Run sorare_get_schema and send the relevant part to fix the query.`
+            `A field name may have changed. Run sorare_get_schema (filter 'Offer' ` +
+            `or 'anyPlayer') and send the result to fix the query.`
         );
       }
     }
