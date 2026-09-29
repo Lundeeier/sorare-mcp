@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: sorare-market-mcp
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Optional: paste a Sorare API key here later to raise rate limits.
+      # - key: SORARE_API_KEY
+      #   sync: false
