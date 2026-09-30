@@ -135,7 +135,8 @@ function buildServer() {
       //   L5  = LAST_FIVE_SO5_AVERAGE_SCORE
       //   L10 = LAST_TEN_PLAYED_SO5_AVERAGE_SCORE
       //   L40 = LAST_FORTY_SO5_AVERAGE_SCORE
-      // AA is averaged in code from the last 15 games (allAroundScore per game).
+      // Real AA: per game, so5Score.allAroundStats[].totalScore summed = that
+      // game's All-Around points. Averaged in code over games actually played.
       const query = `
         query PlayerMarket($slug: String!) {
           anyPlayer(slug: $slug) {
@@ -144,8 +145,11 @@ function buildServer() {
             l10: averageScore(type: LAST_TEN_PLAYED_SO5_AVERAGE_SCORE)
             l40: averageScore(type: LAST_FORTY_SO5_AVERAGE_SCORE)
             anyGameStats(last: 15) {
-              ... on PlayerGameStats {
-                allAroundScore
+              minsPlayed
+              so5Score {
+                allAroundStats {
+                  totalScore
+                }
               }
             }
             tokens {
@@ -167,14 +171,21 @@ function buildServer() {
         if (!player) {
           return textResult(`No player found for slug '${slug}'.`);
         }
-        // Average AA over the games that have a value.
-        const aaVals = (player.anyGameStats || [])
-          .map((g) => (g ? g.allAroundScore : null))
-          .filter((v) => v != null);
+        // Real AA per game = sum of allAroundStats[].totalScore.
+        // Only count games actually played (minsPlayed > 0 and a so5Score).
+        const aaPerGame = (player.anyGameStats || [])
+          .filter((g) => g && g.minsPlayed && g.minsPlayed > 0 && g.so5Score)
+          .map((g) =>
+            (g.so5Score.allAroundStats || []).reduce(
+              (s, st) => s + (st && st.totalScore != null ? st.totalScore : 0),
+              0
+            )
+          );
         const aaAvg =
-          aaVals.length > 0
-            ? (aaVals.reduce((s, v) => s + v, 0) / aaVals.length).toFixed(1)
+          aaPerGame.length > 0
+            ? (aaPerGame.reduce((s, v) => s + v, 0) / aaPerGame.length).toFixed(1)
             : null;
+        const aaGames = aaPerGame.length;
         const raw =
           (player.tokens && player.tokens.liveSingleSaleOffers) || [];
         // Filter by rarity, sort cheapest first, take top N.
@@ -200,12 +211,13 @@ function buildServer() {
             L5_total: player.l5,
             L10_total: player.l10,
             L40_total: player.l40,
-            "AA_last15": aaAvg, // All-Around avg — ONLY last 15 games (API cap)
+            AA_avg: aaAvg, // real All-Around average per played game
+            AA_from_games: aaGames, // how many played games AA was averaged over
           },
           note:
-            "L5/L10/L40 are total Player Scores. AA_last15 is All-Around " +
-            "averaged over the last 15 games only — the API does not expose " +
-            "AA over 40 games.",
+            "L5/L10/L40 are total Player Scores. AA_avg is the REAL All-Around " +
+            "score, summed from allAroundStats per game and averaged over the " +
+            "last " + aaGames + " played games (API returns up to 15).",
           rarity: rarityArg,
           cheapest: offers,
           count: offers.length,
