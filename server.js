@@ -197,11 +197,15 @@ function buildServer() {
         return textResult({
           player: player.displayName,
           scores: {
-            L5: player.l5,
-            L10: player.l10,
-            L40: player.l40,
-            AA: aaAvg, // averaged over last 15 games
+            L5_total: player.l5,
+            L10_total: player.l10,
+            L40_total: player.l40,
+            "AA_last15": aaAvg, // All-Around avg — ONLY last 15 games (API cap)
           },
+          note:
+            "L5/L10/L40 are total Player Scores. AA_last15 is All-Around " +
+            "averaged over the last 15 games only — the API does not expose " +
+            "AA over 40 games.",
           rarity: rarityArg,
           cheapest: offers,
           count: offers.length,
