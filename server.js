@@ -144,7 +144,9 @@ function buildServer() {
             l10: averageScore(type: LAST_TEN_PLAYED_SO5_AVERAGE_SCORE)
             l40: averageScore(type: LAST_FORTY_SO5_AVERAGE_SCORE)
             anyGameStats(last: 15) {
-              allAroundScore
+              ... on PlayerGameStats {
+                allAroundScore
+              }
             }
             tokens {
               liveSingleSaleOffers(playerSlug: $slug) {
